@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import matplotlib.colors as mcolors
-import matplotlib.cm as cm
+import matplotlib
+import json
+import base64
 
-# ==========================================
 # PAGE CONFIGURATION
-# ==========================================
 st.set_page_config(
     page_title="Ladle Tearout",
     layout="wide",
@@ -18,22 +18,53 @@ st.set_page_config(
 
 st.title("Ladle Tearout Report")
 st.markdown("Enter values in the grid below. The 3D diagram will update automatically.")
-
 # disable built in deploy button
 st.set_option("client.toolbarMode", "viewer")
 
+rows = [str(i) for i in range(1, 33)]
+# Columns 12, 1, 2... 11 (Clock positions)
+cols = ["12"] + [str(i) for i in range(1, 12)]
+
+# ONE-TIME URL STATE LOAD
+if "initial_load_complete" not in st.session_state:
+    st.session_state.initial_load_complete = True
+
+    # Defaults
+    st.session_state.r_val = 20.0
+    st.session_state.e_val = 30
+    st.session_state.a_val = 300
+    st.session_state.df_data = pd.DataFrame(np.nan, index=rows, columns=cols)
+
+    if "data" in st.query_params:
+        try:
+            decoded = base64.b64decode(st.query_params["data"])
+            url_data = json.loads(decoded.decode())
+
+            st.session_state.r_val = float(url_data.get("r", 20.0))
+            st.session_state.e_val = int(url_data.get("e", 30))
+            st.session_state.a_val = int(url_data.get("a", 300))
+
+            if "vals" in url_data:
+                st.session_state.df_data = pd.DataFrame(
+                    url_data["vals"], index=rows, columns=cols
+                )
+
+            # Consume URL once
+            st.query_params.clear()
+
+        except Exception:
+            pass
 
 # SIDEBAR CONTROLS
-# ==========================================
 st.sidebar.header("Configuration")
 
 # Radius
-ladle_radius = st.sidebar.slider("Ladle Radius (R)", min_value=5.0, max_value=50.0, value=20.0, step=1.0)
+ladle_radius = st.sidebar.slider("Ladle Radius (R)", min_value=5.0, max_value=50.0, key="r_val", step=1.0)
 
 # Camera View
 st.sidebar.subheader("Camera View")
-elevation_angle = st.sidebar.slider("Viewing Elevation", min_value=-90, max_value=90, value=30)
-azimuth_angle = st.sidebar.slider("Rotation", min_value=0, max_value=360, value=300)
+elevation_angle = st.sidebar.slider("Viewing Elevation", min_value=-90, max_value=90, key="e_val")
+azimuth_angle = st.sidebar.slider("Rotation", min_value=0, max_value=360, key="a_val")
 
 # Plot Title
 plot_title = st.sidebar.text_input("Plot Title", value="Ladle Tearout Report")
@@ -42,14 +73,7 @@ st.sidebar.subheader("Color Scale")
 vmin = st.sidebar.number_input("Min Value (Red)", value=1.0)
 vmax = st.sidebar.number_input("Max Value (Green)", value=6.0)
 
-# ==========================================
 # DATA INPUT 
-# ==========================================
-# Create default empty dataframe structure (32 rows, 12 columns)
-
-rows = [str(i) for i in range(1, 33)]
-# Columns 12, 1, 2... 11 (Clock positions)
-cols = ["12"] + [str(i) for i in range(1, 12)]
 
 # Reset session state if columns changed (e.g. during development/updating code)
 if 'df_data' in st.session_state:
@@ -66,7 +90,7 @@ st.markdown("### Brick Measurements")
 edited_df = st.data_editor(
     st.session_state.df_data,
     height=300,
-    use_container_width=True,
+    width='stretch',
     num_rows="fixed"
 )
 
@@ -74,9 +98,37 @@ edited_df = st.data_editor(
 # Replace empty strings or non-numeric with NaN
 data_numeric = edited_df.apply(pd.to_numeric, errors='coerce').values
 
-# ==========================================
+# --- Generating Share Link ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("Sharing")
+
+if st.sidebar.button("Generate Share Link"):
+    # Create the payload
+    save_data = {
+        "r": ladle_radius,
+        "e": elevation_angle,
+        "a": azimuth_angle,
+        "vals": edited_df.to_dict()
+    }
+    json_str = json.dumps(save_data)
+    b64_str = base64.b64encode(json_str.encode()).decode()
+    
+    # Construction of a proper link. 
+    # In Streamlit Cloud environments, st.query_params alone won't give the domain.
+    # This approach works across both local and cloud deployments.
+    # Note: We use a clickable markdown link as requested.
+    try:
+        # Construct the URL by combining the current base path with the data param
+        share_url = f"?data={b64_str}"
+        
+        st.sidebar.success("Link Generated!")
+        st.sidebar.markdown("Right-click the link below and select **'Copy Link Address'** to share:")
+        st.sidebar.markdown(f"### [Share Design Link]({share_url})")
+        st.sidebar.info("When the recipient opens this link, your measurements and camera view will load automatically.")
+    except Exception as e:
+        st.sidebar.error("Could not generate link.")
+
 # MATH & HELPERS 
-# ==========================================
 
 # ----- CONSTANTS -----
 n_rows, n_cols = data_numeric.shape # Should be 32, 12
@@ -88,7 +140,7 @@ gap_above = 0.8   # space for labels
 
 # Normalize and Color Map
 norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-cmap = cm.get_cmap("RdYlGn")
+cmap = matplotlib.colormaps.get_cmap("RdYlGn")
 dr_scale = (dr_max - dr_min) / max(1e-9, (vmax - vmin))
 
 # Labels
@@ -201,9 +253,7 @@ def render_fixed_positions(ax, data_arr, active_cols, active_labels, R):
     
     return True
 
-# ==========================================
 # MAIN EXECUTION
-# ==========================================
 
 # Active Column Detection
 active_cols = [c for c in range(n_cols) if np.isfinite(data_numeric[:, c]).any()]
@@ -225,7 +275,8 @@ with col1:
         for col_idx in target_indices:
             # Generate random values between 2.0 and 4.5 for all 32 rows
             # This provides variety in color and thickness
-            values = np.random.uniform(2.0, 5.0, size=len(rows))
+            rng = np.random.default_rng()
+            values = rng.random(1, 5, size=len(rows))
             demo_data.iloc[:, col_idx] = values
             
         st.session_state.df_data = demo_data
@@ -253,7 +304,7 @@ with col2:
         ax.set_title(plot_title, fontsize=15, pad=20)
         
         # Colorbar
-        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=ax, fraction=0.030, pad=0.04)
         cbar.set_label("Thickness Value", fontsize=10)

@@ -275,8 +275,7 @@ with col1:
         for col_idx in target_indices:
             # Generate random values between 2.0 and 4.5 for all 32 rows
             # This provides variety in color and thickness
-            rng = np.random.default_rng()
-            values = rng.random(1, 5, size=len(rows))
+            values = np.random.uniform(1, 5, size=len(rows))
             demo_data.iloc[:, col_idx] = values
             
         st.session_state.df_data = demo_data
@@ -310,3 +309,4 @@ with col2:
         cbar.set_label("Thickness Value", fontsize=10)
         
         st.pyplot(fig)
+
